@@ -1,0 +1,208 @@
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: nginx-gateway
+  namespace: nginx
+spec:
+  selector:
+    istio: ingress
+  servers:
+  - hosts:
+    - nginx.domain.local
+    # - '*'
+    port:
+      name: http
+      number: 80
+      protocol: HTTP
+
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: nginx-destrule
+  namespace: nginx
+spec:
+  host: nginx-svc   #value is equal svc name (like "host" in vsvc in destination)
+  subsets:
+  - name: stable
+    labels:
+      app: nginx
+      role: stable
+  - name: canary
+    labels:
+      app: nginx
+      role: canary
+
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: nginx-vsvc
+  namespace: nginx
+spec:
+  gateways:
+    - nginx-gateway
+    - mesh
+  hosts:
+    - nginx.domain.local
+    - nginx-svc.nginx.svc.cluster.local
+  http:
+    - name: primary
+      route:
+        - destination:
+            host: nginx-svc #svc name
+            # port: { number: 80 }
+            subset: stable
+          headers:
+            response:
+              set: { referer-header-from-vs: nginx-stable }
+          weight: 100        
+        - destination:
+            host: nginx-svc #svc name
+            # port: { number: 80 }
+            subset: canary
+          headers:
+            response:
+              set: { referer-header-from-vs: nginx-canary }
+          weight: 0
+
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: nginx-ro
+  namespace: nginx
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: nginx
+  workloadRef: 
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nginx-rollout-ref #deployment name
+    scaleDown: onsuccess
+  minReadySeconds: 30
+  strategy:   #https://argo-rollouts.readthedocs.io/en/stable/features/specification/
+    canary:   #Indicates that the rollout should use the Canary strategy
+      trafficRouting:
+        managedRoutes:
+          - name: route-add-canary-header
+        istio:
+          # Either virtualService or virtualServices can be configured.
+          virtualService: 
+            name: nginx-vsvc  # required
+            # routes:
+            # - primary # optional if there is a single route in VirtualService, required otherwise
+          destinationRule:
+            name: nginx-destrule
+            canarySubsetName: canary
+            stableSubsetName: stable
+      stableMetadata:
+       labels:
+         role: stable
+      canaryMetadata:
+       labels:
+         role: canary
+      maxSurge: "25%"
+      maxUnavailable: 0
+      steps:
+      - setWeight: 1
+      - setHeaderRoute:
+          name: route-add-canary-header
+          match:
+          - headerName: x-qa-deploy-role
+            headerValue:
+              exact: canary            
+      - pause: {} # pause indefinitely
+      - setHeaderRoute:
+          name: "route-add-canary-header"
+      - setWeight: 100
+status:
+  promoteFull: true
+
+   
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: nginx
+  name: nginx-svc
+  namespace: nginx
+spec:
+  ports:
+  - name: http
+    port: 80
+    protocol: TCP
+    targetPort: 80
+  selector:
+    app: nginx
+  type: ClusterIP
+
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-rollout-ref
+  namespace: nginx
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 0
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+        version: "1.0.0"   #need for service mesh to know which version to route to
+    spec:
+      containers:
+      - env:
+        - name: COLOR
+          value: "red"
+        - name: BGCOLOR
+          value: "yellow"
+        - name: CUSTOM_TEXT
+          value: "App instance response text here..."
+        - name: APP_VERSION
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['version']
+        - name: CUSTOM_HEADER
+          value: 'x-instance-id-header="Instance $(APP_VERSION)"'    # set app version in header from template.metadata.labels.version
+        ports:
+        - containerPort: 80
+        image: neiromc/nginx-color:latest
+        imagePullPolicy: IfNotPresent
+        name: app
+        readinessProbe:
+          failureThreshold: 3
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          successThreshold: 1
+          tcpSocket:
+            port: 80
+          timeoutSeconds: 5
+        resources:
+          limits:
+            cpu: 50m
+            memory: 64Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+

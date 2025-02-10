@@ -1,0 +1,46 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: job-rollout-abort
+  namespace: <namespace>
+spec:
+  ttlSecondsAfterFinished: 90
+  backoffLimit: 3
+  suspend: false
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        sidecar.istio.io/inject: "false"
+        job-name: job-rollout-abort
+    spec:
+      containers:
+      - env:
+        - name: ROLLOUT_NAME
+          value: <rollout-name>
+        - name: ROLLOUT_PATCH
+          value: '{"status":{"abort":true}}'
+        command:
+        - /bin/sh
+        - -c      
+        - kubectl patch rollouts.argoproj.io ${ROLLOUT_NAME} --type=merge --subresource status -p ${ROLLOUT_PATCH}
+        image: bitnami/kubectl:latest
+        imagePullPolicy: IfNotPresent
+        name: kubectl
+        resources: 
+          limits:
+            cpu: 10m
+            memory: 32Mi
+          requests:
+            cpu: 10m
+            memory: 32Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      restartPolicy: OnFailure
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+      serviceAccount: job-rollout-kubectl-sa
+      serviceAccountName: job-rollout-kubectl-sa

@@ -1,0 +1,37 @@
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: job-rollout-kubectl-sa
+  namespace: <namespace>
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: job-rollout-kubectl-role
+  namespace: <namespace>
+rules:
+- apiGroups:
+  - argoproj.io
+  resources:
+  - rollouts/status
+  verbs:
+  - get
+  - patch
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: job-rollout-kubectl-role-binding
+  namespace: <namespace>
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: job-rollout-kubectl-role
+subjects:
+- kind: ServiceAccount
+  name: job-rollout-kubectl-sa
+
